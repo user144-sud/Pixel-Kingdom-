@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pixel Kingdom: Ink & Paper</title>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; }
+        canvas { display: block; background-color: #d4c590; image-rendering: pixelated; }
+
+        .overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #d4c590; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 2000;
+        }
+
+        #menuCanvasBg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; }
+        .menu-title { font-size: 80px; color: #000; margin-bottom: 40px; text-transform: uppercase; }
+        
+        .menu-button {
+            background: #d4c590; border: 4px solid #000; padding: 10px 40px;
+            font-family: 'VT323', monospace; font-size: 32px; color: #000;
+            cursor: pointer; margin: 10px; width: 280px; text-align: center; z-index: 2001;
+        }
+        .menu-button:hover { background: #000; color: #d4c590; }
+
+        #settingsPage, #deathScreen { display: none; }
+        
+        #deathScreen { background: rgba(212, 197, 144, 0.95); z-index: 5000; }
+        .death-title { font-size: 100px; color: #000; margin-bottom: 20px; text-shadow: 4px 4px 0px rgba(0,0,0,0.1); }
+
+        .settings-container { display: flex; gap: 40px; align-items: flex-start; z-index: 2001; }
+        .settings-controls { display: flex; flex-direction: column; color: #000; font-size: 24px; }
+        
+        input[type=range] { appearance: none; background: #000; height: 4px; margin-top: 10px; }
+        input[type=range]::-webkit-slider-thumb { appearance: none; width: 15px; height: 15px; background: #000; border: 2px solid #d4c590; cursor: pointer; }
+
+        #minimapPreview { width: 300px; height: 300px; border: 4px solid #000; background: #c5b681; }
+
+        /* JOYSTICK */
+        #joystickContainer {
+            position: absolute; bottom: 50px; left: 50px;
+            width: 120px; height: 120px;
+            display: none; z-index: 3000;
+            user-select: none;
+        }
+        #joystickBase {
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.1);
+            border: 6px solid #000;
+            position: relative;
+        }
+        #joystickStick {
+            width: 50px; height: 50px;
+            background: #000;
+            position: absolute; top: 35px; left: 35px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- MAIN MENU -->
+    <div id="mainMenu" class="overlay">
+        <canvas id="menuCanvasBg"></canvas>
+        <div class="menu-title">Pixel Kingdom</div>
+        <div class="menu-button" onclick="showSettings()">New Game</div>
+        <div class="menu-button" style="opacity: 0.5; cursor: default;">Continue</div>
+        <div class="menu-button" id="joyToggle" onclick="toggleJoystick()">Mobile Controls: OFF</div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div id="settingsPage" class="overlay">
+        <div class="menu-title" style="font-size: 50px;">Map Settings</div>
+        <div class="settings-container">
+            <div class="settings-controls">
+                <label>Vegetation Density</label>
+                <input type="range" id="cfgDensity" min="200" max="1500" value="800" oninput="updatePreview()">
+                <label>River Count</label>
+                <input type="range" id="cfgRivers" min="0" max="30" value="12" oninput="updatePreview()">
+                <div style="margin-top: 40px; display: flex; gap: 10px;">
+                    <div class="menu-button" style="width: 120px;" onclick="backToMenu()">Back</div>
+                    <div class="menu-button" style="width: 120px;" onclick="startGame()">Start</div>
+                </div>
+            </div>
+            <div>
+                <canvas id="minimapPreview"></canvas>
+                <div style="color: #000; text-align: center; margin-top: 10px;">MAP PREVIEW</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DEATH SCREEN -->
+    <div id="deathScreen" class="overlay">
+        <div class="death-title">YOU FELL</div>
+        <div style="color: #000; font-size: 30px; margin-bottom: 40px;">Your army has a new master...</div>
+        <div class="menu-button" onclick="respawn()">Respawn</div>
+        <div class="menu-button" onclick="quitToMenu()">Quit to Menu</div>
+    </div>
+
+    <!-- CONTROLS -->
+    <div id="joystickContainer">
+        <div id="joystickBase">
+            <div id="joystickStick"></div>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const previewCanvas = document.getElementById('minimapPreview');
+    const pCtx = previewCanvas.getContext('2d');
+    const menuBg = document.getElementById('menuCanvasBg');
+    const mCtx = menuBg.getContext('2d');
+
+    const COLOR_BG = "#d4c590";
+    const COLOR_INK = "#000000";
+    const WORLD_SIZE = 4000;
+
+    let gameState = 'menu';
+    let width, height;
+    const player = { x: WORLD_SIZE/2, y: WORLD_SIZE/2, speed: 2.5, hp: 100, maxHp: 100, team: 0, lastHitBy: -1 };
+    let worldObjects = [], rivers = [], minions = [], bots = [];
+    let camera = { x: 0, y: 0 };
+    let mouseWorld = { x: 0, y: 0 };
+    let clickMarker = { x: 0, y: 0, active: false, timer: 0 };
+    const keys = {};
+    let mapConfig = { density: 800, rivers: 12 };
+
+    let joystickEnabled = false;
+    let joystickActive = false;
+    let joyData = { x: 0, y: 0 };
+
+    let playerPixels = [], minionPixels = [], treePixels = [], mountainPixels = [];
+
+    function extractPixels(base64, callback) {
+        const img = new Image();
+        img.src = base64;
+        img.onload = () => {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = 32; tempCanvas.height = 32;
+            const tCtx = tempCanvas.getContext('2d');
+            tCtx.drawImage(img, 0, 0);
+            const data = tCtx.getImageData(0, 0, 32, 32).data;
+            let pixels = [];
+            for (let y = 0; y < 32; y++) {
+                for (let x = 0; x < 32; x++) {
+                    const alpha = data[(y * 32 + x) * 4 + 3];
+                    const r = data[(y * 32 + x) * 4];
+                    if (alpha > 128 && r < 100) pixels.push({ x: x - 16, y: y - 16 });
+                }
+            }
+            callback(pixels);
+        };
+    }
+
+    const b64Player = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAvElEQVR4AeyUUQoDMQhE097/zq3vY6AstclooVBcVoyu67xIyH39+BmAmUB3Ao84w7JY+m8HAOFbSMqII/TeDoCnlFR3ANi5do0nTmTydAeAroiWxWnQBaAHEPiSVQHYtQSztb5/9FUAmr4Kv4vJba0KoLELQl75rbAKqgD6v+0HYCbgTEAn/fTgHdU7AAgfNY3C07rlAkTvRXOM9dXIY9d8GjsAXDKupcL64ADon6/6AZgJzAT+fwK7S+MJAAD//6DnMeYAAAAGSURBVAMAJSoXQRAMAsQAAAAASUVORK5CYII=";
+    const b64Minion = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAfElEQVR4AeyV0QqAIAxFq///5+KCwbqgrbuHUG4wdDrd4fTgsf38GcAGbMAGbGBaA2d7Qnhsy/mhYqDcHJgqwI7DITgPW+OpCjC+9cOuAnCr5za9da575AoALuBmnKMmFQoA/ncvUk1jkQIQz5fnBrABG7ABG1jfwNtjcQEAAP//ChgDowAAAAZJREFUAwB71glBU0HPPgAAAABJRU5ErkJggg==";
+    const b64Tree = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAkklEQVR4AexVQQ6AMAhT//9nTZaVsASROhOjqQcLA0rtwW3Ly48EyAE5IAfkwOcc2AtXR6XHaBgHQAwEic8RA9FzioyAiASLgFFPejYrICWvFBkBaycE9nQA1IBDMUoYAdE8FgGjnvRsVkBKXimyAipWWukxbawAG3QBtdDNtfAJAY3o7ksC5IAckAP/d+DqD3kAAAD//5WC4ikAAAAGSURBVAMA6JQJQY+q2NoAAAAASUVORK5CYII=";
+    const b64Mountain = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAtElEQVR4AeyU0QqAMAhFV///z9V5CKRNnW0RDCOZs/SeLrS9/HwlQDqQDqQDSzhwjBymow4gvl0ArNcSv0cAEEUcVVb25KF4C4AYolKMPXVZc/M3AJZIGCIKIMXJifsryQn290puRgRAG0qdeAq1as93Si9A17BqeiluXw+AO6QhLEtmvwdgNksVJ1fnWABqkyOmPW7OswC0QVPrFgD/9Oyo4C2A6uUvCgmQDqQD6zvgnR0nAAAA///zLmpeAAAABklEQVQDAH5FG0HjPkl2AAAAAElFTkSuQmCC";
+
+    extractPixels(b64Player, p => playerPixels = p);
+    extractPixels(b64Minion, p => minionPixels = p);
+    extractPixels(b64Tree, p => treePixels = p);
+    extractPixels(b64Mountain, p => mountainPixels = p);
+
+    function resize() {
+        width = window.innerWidth; height = window.innerHeight;
+        canvas.width = width; canvas.height = height;
+        menuBg.width = width; menuBg.height = height;
+        if(gameState === 'menu') drawMenuTowers();
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    function drawMenuTowers() {
+        mCtx.fillStyle = COLOR_BG; mCtx.fillRect(0, 0, width, height);
+        mCtx.fillStyle = "rgba(0, 0, 0, 0.15)";
+        for (let i = 0; i < width / 120; i++) {
+            let tx = i * 150 + 50, tw = 80, th = 200 + Math.random() * 300;
+            mCtx.fillRect(Math.round(tx/10)*10, height - th, Math.round(tw/10)*10, th);
+        }
+    }
+
+    function showSettings() { document.getElementById('mainMenu').style.display = 'none'; document.getElementById('settingsPage').style.display = 'flex'; updatePreview(); }
+    function backToMenu() { document.getElementById('mainMenu').style.display = 'flex'; document.getElementById('settingsPage').style.display = 'none'; drawMenuTowers(); }
+    function toggleJoystick() { joystickEnabled = !joystickEnabled; document.getElementById('joyToggle').innerText = "Mobile Controls: " + (joystickEnabled ? "ON" : "OFF"); }
+
+    function startGame() { 
+        document.getElementById('settingsPage').style.display = 'none'; 
+        if(joystickEnabled) document.getElementById('joystickContainer').style.display = 'block';
+        gameState = 'playing'; init(); 
+    }
+
+    function respawn() {
+        document.getElementById('deathScreen').style.display = 'none';
+        init();
+    }
+
+    function quitToMenu() {
+        document.getElementById('deathScreen').style.display = 'none';
+        document.getElementById('joystickContainer').style.display = 'none';
+        document.getElementById('mainMenu').style.display = 'flex';
+        gameState = 'menu';
+        drawMenuTowers();
+    }
+
+    function updatePreview() {
+        mapConfig.density = parseInt(document.getElementById('cfgDensity').value);
+        mapConfig.rivers = parseInt(document.getElementById('cfgRivers').value);
+        pCtx.fillStyle = "#c5b681"; pCtx.fillRect(0, 0, 300, 300);
+        pCtx.fillStyle = "#000";
+        for(let i=0; i<mapConfig.rivers; i++) pCtx.fillRect(Math.random()*300, Math.random()*300, 30, 4);
+        for(let i=0; i<mapConfig.density/15; i++) pCtx.fillRect(Math.random()*300, Math.random()*300, 4, 4);
+    }
+
+    // Input
+    window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+    window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+    
+    // Joystick Touch
+    const joyStick = document.getElementById('joystickStick');
+    const joyBase = document.getElementById('joystickBase');
+    joyBase.addEventListener('touchstart', (e) => { joystickActive = true; });
+    window.addEventListener('touchend', () => { 
+        joystickActive = false; joyStick.style.top = '35px'; joyStick.style.left = '35px'; joyData = {x:0, y:0};
+    });
+    window.addEventListener('touchmove', (e) => {
+        if (!joystickActive) return;
+        const touch = e.touches[0];
+        const rect = joyBase.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        let dx = touch.clientX - centerX;
+        let dy = touch.clientY - centerY;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 40) { dx *= 40 / dist; dy *= 40 / dist; }
+        joyStick.style.left = (35 + dx) + 'px'; joyStick.style.top = (35 + dy) + 'px';
+        joyData.x = dx / 40; joyData.y = dy / 40;
+    });
+
+    canvas.addEventListener('mousedown', (e) => {
+        if(gameState !== 'playing' || e.button !== 0) return;
+        handleAction(e.clientX + camera.x, e.clientY + camera.y);
+    });
+
+    function handleAction(worldX, worldY) {
+        clickMarker = { x: worldX, y: worldY, active: true, timer: 30 };
+        let target = worldObjects.find(obj => Math.hypot(obj.x - worldX, obj.y - worldY) < 40) ||
+                     bots.find(b => Math.hypot(b.x - worldX, b.y - worldY) < 40);
+        minions.forEach(m => {
+            if(m.team === 0) {
+                if (target) { m.targetObj = target; m.state = 'attacking'; }
+                else { m.targetPos = { x: worldX + (Math.random()*60-30), y: worldY + (Math.random()*60-30) }; m.state = 'moving'; }
+            }
+        });
+    }
+
+    function init() {
+        worldObjects = []; rivers = []; minions = []; bots = [];
+        player.hp = 100; player.x = WORLD_SIZE/2; player.y = WORLD_SIZE/2; player.lastHitBy = -1;
+        for (let r = 0; r < mapConfig.rivers; r++) {
+            let rx = Math.random() * WORLD_SIZE, ry = Math.random() * WORLD_SIZE;
+            for(let s = 0; s < 40; s++) { rivers.push({ x: Math.floor(rx/30)*30, y: Math.floor(ry/30)*30 }); rx += (Math.random()-0.35)*40; ry += 30; }
+        }
+        while (worldObjects.length < mapConfig.density) {
+            let x = Math.random() * WORLD_SIZE, y = Math.random() * WORLD_SIZE;
+            let type = Math.random() > 0.85 ? 'mountain' : 'tree';
+            if (isSpaceFree(x, y, 70)) worldObjects.push({ x, y, type, hp: 80, maxHp: 80, hpShowTimer: 0 });
+        }
+        for(let i=0; i<3; i++) spawnMinion(player.x, player.y, 0);
+        for(let i=0; i<8; i++) {
+            let bx = Math.random() * WORLD_SIZE, by = Math.random() * WORLD_SIZE;
+            let teamId = i + 1;
+            bots.push({ x: bx, y: by, hp: 100, maxHp: 100, team: teamId, timer: 0, speed: 1.5, lastHitBy: -1 });
+            for(let j=0; j<3; j++) spawnMinion(bx, by, teamId);
+        }
+    }
+
+    function isSpaceFree(x, y, radius) {
+        for (let obj of worldObjects) if (Math.hypot(obj.x - x, obj.y - y) < radius) return false;
+        for (let r of rivers) if (Math.hypot((r.x + 15) - x, (r.y + 15) - y) < radius + 20) return false;
+        return true;
+    }
+
+    function spawnMinion(x, y, team) {
+        minions.push({ x, y, hp: 50, maxHp: 50, team, state: 'following', offX: Math.random()*100-50, offY: Math.random()*100-50, targetPos: null, targetObj: null });
+    }
+
+    function update() {
+        if (gameState !== 'playing' || player.hp <= 0) return;
+
+        // Player Move
+        let mvX = 0, mvY = 0;
+        if (keys['w'] || keys['arrowup']) mvY -= 1;
+        if (keys['s'] || keys['arrowdown']) mvY += 1;
+        if (keys['a'] || keys['arrowleft']) mvX -= 1;
+        if (keys['d'] || keys['arrowright']) mvX += 1;
+        if (joystickActive) { mvX = joyData.x; mvY = joyData.y; }
+
+        if (mvX !== 0 || mvY !== 0) {
+            const mag = Math.hypot(mvX, mvY);
+            player.x += (mvX / mag) * player.speed;
+            player.y += (mvY / mag) * player.speed;
+        }
+        
+        camera.x = player.x - width/2; camera.y = player.y - height/2;
+        if(clickMarker.active) { clickMarker.timer--; if(clickMarker.timer <= 0) clickMarker.active = false; }
+
+        // Bot AI
+        bots.forEach(b => {
+            b.timer--;
+            if(b.timer <= 0) { b.targetX = Math.random() * WORLD_SIZE; b.targetY = Math.random() * WORLD_SIZE; b.timer = 200 + Math.random() * 300; }
+            if(b.targetX) {
+                let dx = b.targetX - b.x, dy = b.targetY - b.y, dist = Math.hypot(dx, dy);
+                if(dist > 5) { b.x += (dx / dist) * b.speed; b.y += (dy / dist) * b.speed; }
+            }
+            let enemy = bots.find(other => other.team !== b.team && Math.hypot(other.x - b.x, other.y - b.y) < 350) || (Math.hypot(player.x - b.x, player.y - b.y) < 350 ? player : null);
+            if(enemy) { minions.forEach(m => { if(m.team === b.team && m.state === 'following') { m.targetObj = enemy; m.state = 'attacking'; } }); }
+        });
+
+        // Minions
+        minions.forEach(m => {
+            let leader = (m.team === 0) ? player : bots.find(b => b.team === m.team);
+            if (m.state === 'attacking' && m.targetObj) {
+                let dist = Math.hypot(m.targetObj.x - m.x, m.targetObj.y - m.y);
+                if (dist > 30) { m.x += (m.targetObj.x - m.x) * 0.05; m.y += (m.targetObj.y - m.y) * 0.05; }
+                else { m.targetObj.hp -= 0.5; m.targetObj.lastHitBy = m.team; if(m.targetObj.hpShowTimer !== undefined) m.targetObj.hpShowTimer = 60; }
+                if(!m.targetObj || m.targetObj.hp <= 0) { m.state = 'following'; m.targetObj = null; }
+            } else if (m.state === 'moving' && m.targetPos) {
+                m.x += (m.targetPos.x - m.x) * 0.05; m.y += (m.targetPos.y - m.y) * 0.05;
+                if(Math.hypot(m.targetPos.x - m.x, m.targetPos.y - m.y) < 10) m.state = 'following';
+            } else if (leader) {
+                m.x += (leader.x + m.offX - m.x) * 0.04; m.y += (leader.y + m.offY - m.y) * 0.04;
+            }
+        });
+
+        // Cleanup & Stealing
+        bots.forEach((b, i) => { if(b.hp <= 0) { let winner = b.lastHitBy; minions.forEach(m => { if(m.team === b.team) { m.team = winner; m.state = 'following'; } }); bots.splice(i, 1); } });
+        
+        if(player.hp <= 0) {
+            let winner = player.lastHitBy;
+            minions.forEach(m => { if(m.team === 0) { m.team = winner; m.state = 'following'; } });
+            document.getElementById('deathScreen').style.display = 'flex';
+        }
+        worldObjects = worldObjects.filter(obj => obj.hp > 0);
+    }
+
+    function draw() {
+        if (gameState !== 'playing') { requestAnimationFrame(draw); return; }
+        ctx.fillStyle = COLOR_BG; ctx.fillRect(0, 0, width, height);
+        ctx.save(); ctx.translate(-camera.x, -camera.y);
+        ctx.fillStyle = COLOR_INK;
+        rivers.forEach(r => ctx.fillRect(r.x, r.y, 30, 30));
+        if(clickMarker.active) { for(let i = -8; i <= 8; i++) { ctx.fillRect(clickMarker.x + i - 1, clickMarker.y + i - 1, 3, 3); ctx.fillRect(clickMarker.x + i - 1, clickMarker.y - i - 1, 3, 3); } }
+        worldObjects.forEach(obj => { let px = obj.type === 'tree' ? treePixels : mountainPixels; px.forEach(p => ctx.fillRect(obj.x + p.x * 2, obj.y + p.y * 2, 2, 2)); if(obj.hpShowTimer > 0) { obj.hpShowTimer--; ctx.strokeRect(obj.x - 15, obj.y - 30, 30, 4); ctx.fillRect(obj.x - 15, obj.y - 30, 30 * (obj.hp/obj.maxHp), 4); } });
+        bots.forEach(b => { playerPixels.forEach(p => ctx.fillRect(b.x + p.x * 2, b.y + p.y * 2, 2, 2)); ctx.strokeRect(b.x - 15, b.y - 25, 30, 4); ctx.fillRect(b.x - 15, b.y - 25, 30 * (b.hp/b.maxHp), 4); });
+        if(player.hp > 0) playerPixels.forEach(p => ctx.fillRect(player.x + p.x * 2, player.y + p.y * 2, 2, 2));
+        minions.forEach(m => minionPixels.forEach(p => ctx.fillRect(m.x + p.x * 2, m.y + p.y * 2, 2, 2)));
+        ctx.restore(); requestAnimationFrame(draw);
+    }
+
+    setInterval(update, 1000/60);
+    draw();
+</script>
+</body>
+</html>
